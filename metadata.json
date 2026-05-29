@@ -1,0 +1,6 @@
+{
+  "name": "Reserva de Quadras",
+  "description": "Sistema para gerenciamento e reserva de quadras esportivas com quadro interativo em tempo real.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
