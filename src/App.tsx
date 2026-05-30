@@ -8,6 +8,7 @@ import {
   fetchAllReservations,
   saveReservationToDB,
   deleteReservationFromDB,
+  supabase,
 } from './lib/supabase';
 import {
   Trophy,
@@ -38,29 +39,71 @@ export default function App() {
   // States
   const [isLoading, setIsLoading] = useState(true);
 
-  // Load reservations from Supabase / localStorage fallback on mount
+  // Load reservations from Supabase / localStorage fallback on mount & keep in sync in real-time
   useEffect(() => {
-    async function loadData() {
-      setIsLoading(true);
+    let active = true;
+
+    async function loadData(showLoadingIndicator = false) {
+      if (showLoadingIndicator) setIsLoading(true);
       try {
         const reservationsMap = await fetchAllReservations();
+        if (!active) return;
         setCourts((prevCourts) =>
           prevCourts.map((c) => {
             const list = reservationsMap[c.id] || [];
             return {
               ...c,
               reservations: list,
-              status: list.length > 0 ? 'RESERVADA' : c.status
+              status: list.length > 0 ? 'RESERVADA' : (c.status === 'RESERVADA' ? 'LIVRE' : c.status)
             };
           })
         );
       } catch (err) {
-        console.error('Failed fetching data', err);
+        console.error('Falha ao sincronizar dados com o servidor:', err);
       } finally {
-        setIsLoading(false);
+        if (showLoadingIndicator && active) setIsLoading(false);
       }
     }
-    loadData();
+
+    // 1. Initial full-page load
+    loadData(true);
+
+    // 2. Setup standard multi-user background polling every 4 seconds to guarantee syncing
+    const pollInterval = setInterval(() => {
+      loadData(false);
+    }, 4000);
+
+    // 3. Setup real-time postgres change channel with Supabase websocket
+    let channel: any = null;
+    if (isSupabaseConfigured && supabase) {
+      try {
+        channel = supabase
+          .channel('schema-db-changes')
+          .on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'reservations',
+            },
+            () => {
+              // Trigger a silent database fetch when any insert/delete/update transaction occurs
+              loadData(false);
+            }
+          )
+          .subscribe();
+      } catch (wsError) {
+        console.warn('Realtime websockets unavailable or blocked. Standard fallback polling remains active.', wsError);
+      }
+    }
+
+    return () => {
+      active = false;
+      clearInterval(pollInterval);
+      if (channel && supabase) {
+        supabase.removeChannel(channel).catch(() => {});
+      }
+    };
   }, []);
 
   // Handler for reserving a court via Form Submission
